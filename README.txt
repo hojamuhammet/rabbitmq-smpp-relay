@@ -1,0 +1,1 @@
+Gets txt from rabbitmq queue and sends as SMS message using smpp
