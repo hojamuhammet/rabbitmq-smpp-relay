@@ -2,8 +2,8 @@ package smpp
 
 import (
 	"fmt"
-	"log"
 	"rabbitmq-smpp-relay/internal/config"
+	"rabbitmq-smpp-relay/pkg/logger"
 	"time"
 
 	"github.com/fiorix/go-smpp/smpp"
@@ -18,9 +18,10 @@ const (
 
 type SMPPClient struct {
 	Transmitter *smpp.Transmitter
+	Logger      *logger.Loggers
 }
 
-func NewSMPPClient(cfg *config.Config) (*SMPPClient, error) {
+func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers) (*SMPPClient, error) {
 	smppCfg := cfg.SMPP
 	tm := &smpp.Transmitter{
 		Addr:   smppCfg.Addr,
@@ -31,19 +32,21 @@ func NewSMPPClient(cfg *config.Config) (*SMPPClient, error) {
 	connStatus := tm.Bind()
 	for status := range connStatus {
 		if status.Status() == smpp.Connected {
-			log.Println("Connected to SMPP server.")
+			loggers.InfoLogger.Info("Connected to SMPP server.")
 			break
 		} else {
-			log.Println("Failed to connect to SMPP server:", status.Error())
-			log.Println("Retrying in 5 seconds...")
+			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error())
+			loggers.InfoLogger.Info("Retrying in 5 seconds...")
 			time.Sleep(5 * time.Second)
 		}
 	}
 
-	return &SMPPClient{Transmitter: tm}, nil
+	return &SMPPClient{Transmitter: tm, Logger: loggers}, nil
 }
 
 func (c *SMPPClient) SendSMS(src, dest, text string) error {
+	c.Logger.InfoLogger.Info("Sending SMS", "src", src, "dst", dest, "text", text)
+
 	shortMsg := &smpp.ShortMessage{
 		Src:  src,
 		Dst:  dest,
@@ -53,14 +56,14 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	for attempt := 0; attempt < MaxRetries; attempt++ {
 		pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
 		if err != nil {
-			log.Printf("Failed to send SMS, attempt %d, error: %v", attempt+1, err)
+			c.Logger.ErrorLogger.Error("Failed to send SMS", "attempt", attempt+1, "error", err)
 			time.Sleep(RetryDelay)
 			continue
 		}
 
 		for i := range pdus {
 			pdu := &pdus[i]
-			log.Printf("Message segment sent successfully, Src: %s, Dst: %s, Text: %s", pdu.Src, pdu.Dst, pdu.Text)
+			c.Logger.InfoLogger.Info("Message segment sent successfully", "src", pdu.Src, "dst", pdu.Dst, "text", pdu.Text)
 		}
 
 		return nil
