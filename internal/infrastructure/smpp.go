@@ -50,7 +50,7 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	shortMsg := &smpp.ShortMessage{
 		Src:  src,
 		Dst:  dest,
-		Text: pdutext.UCS2(text), // Automatically handles UCS2 encoding
+		Text: pdutext.UCS2(text),
 	}
 
 	for attempt := 0; attempt < MaxRetries; attempt++ {

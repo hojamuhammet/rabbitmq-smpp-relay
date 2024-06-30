@@ -16,7 +16,6 @@ import (
 )
 
 func main() {
-	// Initialize the logger
 	env := os.Getenv("ENV")
 	loggers, err := logger.SetupLogger(env)
 	if err != nil {
