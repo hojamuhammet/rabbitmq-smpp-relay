@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -14,6 +14,12 @@ import (
 
 	"github.com/streadway/amqp"
 )
+
+type Message struct {
+	Src  string `json:"src"`
+	Dst  string `json:"dst"`
+	Text string `json:"text"`
+}
 
 func main() {
 	env := os.Getenv("ENV")
@@ -57,6 +63,17 @@ func main() {
 		return
 	}
 
+	err = ch.QueueBind(
+		cfg.Rabbitmq.Queue,
+		"",                // routing key
+		"extra.turkmentv", // exchange
+		false,
+		nil)
+	if err != nil {
+		loggers.ErrorLogger.Error("Failed to bind queue", "error", err)
+		return
+	}
+
 	msgs, err := ch.Consume(
 		cfg.Rabbitmq.Queue,
 		"",
@@ -90,33 +107,26 @@ func main() {
 		go func(msg amqp.Delivery) {
 			defer wg.Done()
 
-			loggers.InfoLogger.Info("Received a message", "body", string(msg.Body))
-			message := string(msg.Body)
-			if !strings.HasPrefix(message, "src=") {
-				loggers.ErrorLogger.Error("Invalid message format", "message", message)
+			rawBody := string(msg.Body)
+			loggers.InfoLogger.Info("Received a raw message", "body", rawBody)
+
+			var message Message
+			if err := json.Unmarshal(msg.Body, &message); err != nil {
+				loggers.ErrorLogger.Error("Invalid message format", "error", err, "body", rawBody)
 				return
 			}
 
-			parts := strings.SplitN(message, ", dst=", 2)
-			if len(parts) != 2 {
-				loggers.ErrorLogger.Error("Invalid message format", "message", message)
-				return
-			}
-			src := strings.TrimPrefix(parts[0], "src=")
+			loggers.InfoLogger.Info("Parsed message", "src", message.Src, "dst", message.Dst, "text", message.Text)
 
-			remaining := strings.SplitN(parts[1], ", txt=", 2)
-			if len(remaining) != 2 {
-				loggers.ErrorLogger.Error("Invalid message format", "message", message)
+			if message.Src == "" || message.Dst == "" || message.Text == "" {
+				loggers.ErrorLogger.Error("Message fields cannot be empty", "src", message.Src, "dst", message.Dst, "text", message.Text)
 				return
 			}
 
-			dst := remaining[0]
-			txt := remaining[1]
-
-			if err := smppClient.SendSMS(src, dst, txt); err != nil {
+			if err := smppClient.SendSMS(message.Src, message.Dst, message.Text); err != nil {
 				loggers.ErrorLogger.Error("Failed to send SMS", "error", err)
 			} else {
-				loggers.InfoLogger.Info("SMS sent successfully", "src", src, "dst", dst, "txt", txt)
+				loggers.InfoLogger.Info("SMS sent successfully", "src", message.Src, "dst", message.Dst, "text", message.Text)
 			}
 		}(msg)
 	}
