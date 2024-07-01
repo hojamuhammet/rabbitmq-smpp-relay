@@ -16,9 +16,9 @@ import (
 )
 
 type Message struct {
-	Src  string `json:"src"`
-	Dst  string `json:"dst"`
-	Text string `json:"text"`
+	Src string `json:"src"`
+	Dst string `json:"dst"`
+	Msg string `json:"msg"`
 }
 
 func main() {
@@ -65,8 +65,8 @@ func main() {
 
 	err = ch.QueueBind(
 		cfg.Rabbitmq.Queue,
-		"",                // routing key
-		"extra.turkmentv", // exchange
+		"",          // routing key
+		"sms_reply", // exchange
 		false,
 		nil)
 	if err != nil {
@@ -116,17 +116,17 @@ func main() {
 				return
 			}
 
-			loggers.InfoLogger.Info("Parsed message", "src", message.Src, "dst", message.Dst, "text", message.Text)
+			loggers.InfoLogger.Info("Parsed message", "src", message.Src, "dst", message.Dst, "msg", message.Msg)
 
-			if message.Src == "" || message.Dst == "" || message.Text == "" {
-				loggers.ErrorLogger.Error("Message fields cannot be empty", "src", message.Src, "dst", message.Dst, "text", message.Text)
+			if message.Src == "" || message.Dst == "" || message.Msg == "" {
+				loggers.ErrorLogger.Error("Message fields cannot be empty", "src", message.Src, "dst", message.Dst, "msg", message.Msg)
 				return
 			}
 
-			if err := smppClient.SendSMS(message.Src, message.Dst, message.Text); err != nil {
+			if err := smppClient.SendSMS(message.Src, message.Dst, message.Msg); err != nil {
 				loggers.ErrorLogger.Error("Failed to send SMS", "error", err)
 			} else {
-				loggers.InfoLogger.Info("SMS sent successfully", "src", message.Src, "dst", message.Dst, "text", message.Text)
+				loggers.InfoLogger.Info("SMS sent successfully", "src", message.Src, "dst", message.Dst, "msg", message.Msg)
 			}
 		}(msg)
 	}
