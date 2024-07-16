@@ -163,6 +163,7 @@ func monitorNetwork(loggers *logger.Loggers, cfg *config.Config, conn **amqp.Con
 			if err != nil {
 				loggers.ErrorLogger.Error("Failed to reconnect to RabbitMQ", "error", err)
 			} else {
+				loggers.InfoLogger.Info("Reconnected to RabbitMQ")
 				*conn = newConn
 				*ch = newCh
 				go consumeMessages(newCh, smppClient, loggers, wg, cfg)
