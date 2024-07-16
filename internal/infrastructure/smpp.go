@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	MaxRetries   = 3
-	RetryDelay   = 2 * time.Second
-	SegmentDelay = 500 * time.Millisecond
+	MaxRetries     = 3
+	RetryDelay     = 2 * time.Second
+	SegmentDelay   = 500 * time.Millisecond
+	ReconnectDelay = 5 * time.Second
 )
 
 type SMPPClient struct {
@@ -35,13 +36,46 @@ func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers) (*SMPPClient, er
 			loggers.InfoLogger.Info("Connected to SMPP server.")
 			break
 		} else {
-			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error())
+			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error(), "addr", smppCfg.Addr, "user", smppCfg.User)
 			loggers.InfoLogger.Info("Retrying in 5 seconds...")
 			time.Sleep(5 * time.Second)
 		}
 	}
 
-	return &SMPPClient{Transmitter: tm, Logger: loggers}, nil
+	client := &SMPPClient{Transmitter: tm, Logger: loggers}
+	go client.monitorConnection()
+	return client, nil
+}
+
+func (c *SMPPClient) monitorConnection() {
+	for {
+		status := <-c.Transmitter.Bind()
+		if status.Status() == smpp.Disconnected {
+			c.Logger.ErrorLogger.Error("Lost connection to SMPP server", "error", status.Error())
+			c.reconnect()
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func (c *SMPPClient) reconnect() {
+	for {
+		c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
+		connStatus := c.Transmitter.Bind()
+		reconnected := false
+		for status := range connStatus {
+			if status.Status() == smpp.Connected {
+				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
+				reconnected = true
+				break
+			}
+			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
+		}
+		if reconnected {
+			break
+		}
+		time.Sleep(ReconnectDelay)
+	}
 }
 
 func (c *SMPPClient) SendSMS(src, dest, text string) error {

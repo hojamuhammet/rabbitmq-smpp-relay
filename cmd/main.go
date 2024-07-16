@@ -7,10 +7,12 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"rabbitmq-smpp-relay/internal/config"
 	smpp "rabbitmq-smpp-relay/internal/infrastructure"
 	"rabbitmq-smpp-relay/pkg/logger"
+	"rabbitmq-smpp-relay/pkg/utils"
 
 	"github.com/streadway/amqp"
 )
@@ -101,6 +103,8 @@ func main() {
 		os.Exit(0)
 	}()
 
+	go monitorNetwork(loggers)
+
 	loggers.InfoLogger.Info("Waiting for messages...")
 	for msg := range msgs {
 		wg.Add(1)
@@ -132,4 +136,18 @@ func main() {
 	}
 
 	wg.Wait()
+}
+
+func monitorNetwork(loggers *logger.Loggers) {
+	wasNetworkAvailable := true
+	for {
+		isNetworkAvailable := utils.IsNetworkAvailable()
+		if isNetworkAvailable && !wasNetworkAvailable {
+			loggers.InfoLogger.Info("Network connection restored")
+		} else if !isNetworkAvailable && wasNetworkAvailable {
+			loggers.ErrorLogger.Error("Network connection lost")
+		}
+		wasNetworkAvailable = isNetworkAvailable
+		time.Sleep(5 * time.Second)
+	}
 }
