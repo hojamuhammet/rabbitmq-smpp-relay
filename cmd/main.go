@@ -38,57 +38,13 @@ func main() {
 		return
 	}
 
-	conn, err := amqp.Dial(cfg.Rabbitmq.URL)
+	conn, ch, err := connectRabbitMQ(cfg)
 	if err != nil {
 		loggers.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
 		return
 	}
 	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		loggers.ErrorLogger.Error("Failed to open a channel", "error", err)
-		return
-	}
 	defer ch.Close()
-
-	_, err = ch.QueueDeclare(
-		cfg.Rabbitmq.Queue,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		loggers.ErrorLogger.Error("Failed to declare a queue", "error", err)
-		return
-	}
-
-	err = ch.QueueBind(
-		cfg.Rabbitmq.Queue,
-		"",          // routing key
-		"sms_reply", // exchange
-		false,
-		nil)
-	if err != nil {
-		loggers.ErrorLogger.Error("Failed to bind queue", "error", err)
-		return
-	}
-
-	msgs, err := ch.Consume(
-		cfg.Rabbitmq.Queue,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		loggers.ErrorLogger.Error("Failed to register a consumer", "error", err)
-		return
-	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -103,9 +59,70 @@ func main() {
 		os.Exit(0)
 	}()
 
-	go monitorNetwork(loggers)
+	go monitorNetwork(loggers, cfg, &conn, &ch, &wg, smppClient)
 
 	loggers.InfoLogger.Info("Waiting for messages...")
+	consumeMessages(ch, smppClient, loggers, &wg, cfg)
+
+	wg.Wait()
+}
+
+func connectRabbitMQ(cfg *config.Config) (*amqp.Connection, *amqp.Channel, error) {
+	conn, err := amqp.Dial(cfg.Rabbitmq.URL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+
+	_, err = ch.QueueDeclare(
+		cfg.Rabbitmq.Queue,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		conn.Close()
+		ch.Close()
+		return nil, nil, err
+	}
+
+	err = ch.QueueBind(
+		cfg.Rabbitmq.Queue,
+		"",          // routing key
+		"sms_reply", // exchange
+		false,
+		nil)
+	if err != nil {
+		conn.Close()
+		ch.Close()
+		return nil, nil, err
+	}
+
+	return conn, ch, nil
+}
+
+func consumeMessages(ch *amqp.Channel, smppClient *smpp.SMPPClient, loggers *logger.Loggers, wg *sync.WaitGroup, cfg *config.Config) {
+	msgs, err := ch.Consume(
+		cfg.Rabbitmq.Queue,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		loggers.ErrorLogger.Error("Failed to register a consumer", "error", err)
+		return
+	}
+
 	for msg := range msgs {
 		wg.Add(1)
 		go func(msg amqp.Delivery) {
@@ -134,18 +151,26 @@ func main() {
 			}
 		}(msg)
 	}
-
-	wg.Wait()
 }
 
-func monitorNetwork(loggers *logger.Loggers) {
+func monitorNetwork(loggers *logger.Loggers, cfg *config.Config, conn **amqp.Connection, ch **amqp.Channel, wg *sync.WaitGroup, smppClient *smpp.SMPPClient) {
 	wasNetworkAvailable := true
 	for {
 		isNetworkAvailable := utils.IsNetworkAvailable()
 		if isNetworkAvailable && !wasNetworkAvailable {
 			loggers.InfoLogger.Info("Network connection restored")
+			newConn, newCh, err := connectRabbitMQ(cfg)
+			if err != nil {
+				loggers.ErrorLogger.Error("Failed to reconnect to RabbitMQ", "error", err)
+			} else {
+				*conn = newConn
+				*ch = newCh
+				go consumeMessages(newCh, smppClient, loggers, wg, cfg)
+			}
 		} else if !isNetworkAvailable && wasNetworkAvailable {
 			loggers.ErrorLogger.Error("Network connection lost")
+		} else {
+			loggers.InfoLogger.Debug("Network status unchanged", "isNetworkAvailable", isNetworkAvailable)
 		}
 		wasNetworkAvailable = isNetworkAvailable
 		time.Sleep(5 * time.Second)

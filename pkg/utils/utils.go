@@ -14,11 +14,14 @@ func Err(err error) slog.Attr {
 }
 
 func IsNetworkAvailable() bool {
+	hosts := []string{"google.com:80"}
 	timeout := 2 * time.Second
-	conn, err := net.DialTimeout("tcp", "8.8.8.8:53", timeout)
-	if err != nil {
-		return false
+	for _, host := range hosts {
+		conn, err := net.DialTimeout("tcp", host, timeout)
+		if err == nil {
+			conn.Close()
+			return true
+		}
 	}
-	conn.Close()
-	return true
+	return false
 }
