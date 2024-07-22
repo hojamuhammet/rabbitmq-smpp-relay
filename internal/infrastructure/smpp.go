@@ -1,7 +1,6 @@
 package smpp
 
 import (
-	"fmt"
 	"rabbitmq-smpp-relay/internal/config"
 	"rabbitmq-smpp-relay/pkg/logger"
 	"time"
@@ -87,21 +86,25 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 		Text: pdutext.UCS2(text),
 	}
 
-	for attempt := 0; attempt < MaxRetries; attempt++ {
-		pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
-		if err != nil {
-			c.Logger.ErrorLogger.Error("Failed to send SMS", "attempt", attempt+1, "error", err)
-			time.Sleep(RetryDelay)
-			continue
+	go func() {
+		for attempt := 0; attempt < MaxRetries; attempt++ {
+			pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
+			if err != nil {
+				c.Logger.ErrorLogger.Error("Failed to send SMS", "attempt", attempt+1, "error", err)
+				time.Sleep(RetryDelay)
+				continue
+			}
+
+			for i := range pdus {
+				pdu := &pdus[i]
+				c.Logger.InfoLogger.Info("Message segment sent successfully", "src", pdu.Src, "dst", pdu.Dst, "text", pdu.Text)
+			}
+
+			return
 		}
 
-		for i := range pdus {
-			pdu := &pdus[i]
-			c.Logger.InfoLogger.Info("Message segment sent successfully", "src", pdu.Src, "dst", pdu.Dst, "text", pdu.Text)
-		}
+		c.Logger.ErrorLogger.Error("Failed to send SMS after multiple attempts", "src", src, "dst", dest, "text", text)
+	}()
 
-		return nil
-	}
-
-	return fmt.Errorf("failed to send SMS after %d attempts", MaxRetries)
+	return nil
 }

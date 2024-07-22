@@ -144,11 +144,13 @@ func consumeMessages(ch *amqp.Channel, smppClient *smpp.SMPPClient, loggers *log
 				return
 			}
 
-			if err := smppClient.SendSMS(message.Src, message.Dst, message.Msg); err != nil {
-				loggers.ErrorLogger.Error("Failed to send SMS", "error", err)
-			} else {
-				loggers.InfoLogger.Info("SMS sent successfully", "src", message.Src, "dst", message.Dst, "msg", message.Msg)
-			}
+			go func() {
+				if err := smppClient.SendSMS(message.Src, message.Dst, message.Msg); err != nil {
+					loggers.ErrorLogger.Error("Failed to send SMS", "error", err)
+				} else {
+					loggers.InfoLogger.Info("SMS sent successfully", "src", message.Src, "dst", message.Dst, "msg", message.Msg)
+				}
+			}()
 		}(msg)
 	}
 }
