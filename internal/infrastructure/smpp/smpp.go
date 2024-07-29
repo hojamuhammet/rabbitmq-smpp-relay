@@ -1,9 +1,10 @@
 package smpp
 
 import (
+	"time"
+
 	"rabbitmq-smpp-relay/internal/config"
 	"rabbitmq-smpp-relay/pkg/logger"
-	"time"
 
 	"github.com/fiorix/go-smpp/smpp"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdutext"
@@ -78,8 +79,6 @@ func (c *SMPPClient) reconnect() {
 }
 
 func (c *SMPPClient) SendSMS(src, dest, text string) error {
-	c.Logger.InfoLogger.Info("Sending SMS", "src", src, "dst", dest, "text", text)
-
 	shortMsg := &smpp.ShortMessage{
 		Src:  src,
 		Dst:  dest,
