@@ -35,7 +35,7 @@ func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers) (*SMPPClient, er
 			loggers.InfoLogger.Info("Connected to SMPP server.")
 			break
 		} else {
-			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error(), "addr", smppCfg.Addr, "user", smppCfg.User)
+			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error())
 			time.Sleep(5 * time.Second)
 		}
 	}
