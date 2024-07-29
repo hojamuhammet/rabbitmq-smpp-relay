@@ -60,7 +60,7 @@ func main() {
 	}()
 
 	<-done
-	loggers.InfoLogger.Info("Closing RabbitMQ connection...")
+	loggers.InfoLogger.Info("Main function received done signal, closing RabbitMQ connection...")
 	rabbitMQ.Close()
 
 	loggers.InfoLogger.Info("Waiting for all goroutines to finish...")

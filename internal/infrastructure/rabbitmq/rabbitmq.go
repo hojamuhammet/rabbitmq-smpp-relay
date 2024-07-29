@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	MaxReconnectAttempts = 5
-	ReconnectDelay       = 2 * time.Second
+	ReconnectDelay = 5 * time.Second
 )
 
 type RabbitMQ struct {
@@ -43,43 +42,38 @@ func (r *RabbitMQ) connect() error {
 	defer r.mu.Unlock()
 
 	var err error
-	for attempt := 0; attempt < MaxReconnectAttempts; attempt++ {
-		r.conn, err = amqp.Dial(r.cfg.Rabbitmq.URL)
+	r.conn, err = amqp.Dial(r.cfg.Rabbitmq.URL)
+	if err == nil {
+		r.ch, err = r.conn.Channel()
 		if err == nil {
-			r.ch, err = r.conn.Channel()
+			_, err = r.ch.QueueDeclare(
+				r.cfg.Rabbitmq.Queue,
+				true,
+				false,
+				false,
+				false,
+				nil,
+			)
 			if err == nil {
-				_, err = r.ch.QueueDeclare(
+				err = r.ch.QueueBind(
 					r.cfg.Rabbitmq.Queue,
-					true,
-					false,
-					false,
+					"",
+					r.cfg.Rabbitmq.Exchange,
 					false,
 					nil,
 				)
 				if err == nil {
-					err = r.ch.QueueBind(
-						r.cfg.Rabbitmq.Queue,
-						"",
-						r.cfg.Rabbitmq.Exchange,
-						false,
-						nil,
-					)
-					if err == nil {
-						return nil
-					}
+					r.log.InfoLogger.Info("RabbitMQ channel and queue declared.")
+					return nil
 				}
 			}
 		}
-		r.log.ErrorLogger.Error("Failed to connect to RabbitMQ, retrying...", "attempt", attempt+1, "error", err)
-		time.Sleep(ReconnectDelay * time.Duration(attempt+1))
 	}
+	r.log.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
 	return err
 }
 
 func (r *RabbitMQ) ConsumeMessages(handler func(amqp.Delivery), done <-chan struct{}) {
-	r.wg.Add(1)
-	defer r.wg.Done()
-
 	for {
 		select {
 		case <-done:
@@ -97,35 +91,60 @@ func (r *RabbitMQ) ConsumeMessages(handler func(amqp.Delivery), done <-chan stru
 			)
 			if err != nil {
 				r.log.ErrorLogger.Error("Failed to register a consumer, retrying...", "error", err)
-				r.reconnect()
+				r.reconnectAndConsume(handler, done)
 				continue
 			}
-			for msg := range msgs {
-				select {
-				case <-done:
-					r.log.InfoLogger.Info("Message handling received done signal")
-					return
-				default:
-					r.wg.Add(1)
-					go func(msg amqp.Delivery) {
-						defer r.wg.Done()
-						handler(msg)
-					}(msg)
-				}
-			}
+			r.consumeLoop(msgs, handler, done)
 		}
 	}
 }
 
-func (r *RabbitMQ) reconnect() {
+func (r *RabbitMQ) consumeLoop(msgs <-chan amqp.Delivery, handler func(amqp.Delivery), done <-chan struct{}) {
+	r.wg.Add(1)
+	defer r.wg.Done()
+
 	for {
-		err := r.connect()
-		if err == nil {
-			r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+		select {
+		case msg, ok := <-msgs:
+			if !ok {
+				r.log.InfoLogger.Info("Channel closed")
+				r.reconnectAndConsume(handler, done)
+				return
+			}
+			select {
+			case <-done:
+				r.log.InfoLogger.Info("Message handling received done signal")
+				return
+			default:
+				r.wg.Add(1)
+				go func(msg amqp.Delivery) {
+					defer r.wg.Done()
+					handler(msg)
+				}(msg)
+			}
+		case <-done:
+			r.log.InfoLogger.Info("Exiting message loop due to done signal")
 			return
 		}
-		r.log.ErrorLogger.Error("Failed to reconnect to RabbitMQ, retrying...", "error", err)
-		time.Sleep(ReconnectDelay)
+	}
+}
+
+func (r *RabbitMQ) reconnectAndConsume(handler func(amqp.Delivery), done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			r.log.InfoLogger.Info("Reconnection stopped due to done signal")
+			return
+		default:
+			err := r.connect()
+			if err == nil {
+				r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+				go r.ConsumeMessages(handler, done)
+				return
+			}
+			r.log.ErrorLogger.Error("Failed to reconnect to RabbitMQ, retrying...", "error", err)
+			time.Sleep(ReconnectDelay)
+		}
 	}
 }
 
