@@ -183,7 +183,6 @@ func (r *RabbitMQ) consumeMessages() {
 				r.handler(msg)
 			}(msg)
 		case <-r.done:
-			r.log.InfoLogger.Info("ConsumeMessages received done signal")
 			return
 		}
 	}
@@ -207,6 +206,4 @@ func (r *RabbitMQ) Close() {
 	if r.conn != nil {
 		r.conn.Close()
 	}
-
-	r.log.InfoLogger.Info("RabbitMQ connection closed.")
 }
