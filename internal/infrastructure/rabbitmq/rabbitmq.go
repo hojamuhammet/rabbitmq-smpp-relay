@@ -15,14 +15,15 @@ const (
 )
 
 type RabbitMQ struct {
-	conn    *amqp.Connection
-	ch      *amqp.Channel
-	cfg     *config.Config
-	log     *logger.Loggers
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	done    chan struct{}
-	handler func(amqp.Delivery)
+	conn         *amqp.Connection
+	ch           *amqp.Channel
+	cfg          *config.Config
+	log          *logger.Loggers
+	mu           sync.Mutex
+	wg           sync.WaitGroup
+	done         chan struct{}
+	handler      func(amqp.Delivery)
+	reconnecting bool
 }
 
 func NewRabbitMQ(cfg *config.Config, loggers *logger.Loggers) (*RabbitMQ, error) {
@@ -46,12 +47,14 @@ func (r *RabbitMQ) connect() error {
 	r.conn, err = amqp.Dial(r.cfg.Rabbitmq.URL)
 	if err != nil {
 		r.log.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
+		r.conn = nil // Ensure conn is nil if there's an error
 		return err
 	}
 
 	r.ch, err = r.conn.Channel()
 	if err != nil {
 		r.conn.Close()
+		r.conn = nil // Ensure conn is nil if there's an error
 		r.log.ErrorLogger.Error("Failed to create RabbitMQ channel", "error", err)
 		return err
 	}
@@ -67,6 +70,7 @@ func (r *RabbitMQ) connect() error {
 	if err != nil {
 		r.conn.Close()
 		r.ch.Close()
+		r.conn = nil // Ensure conn is nil if there's an error
 		r.log.ErrorLogger.Error("Failed to declare RabbitMQ queue", "error", err)
 		return err
 	}
@@ -81,6 +85,7 @@ func (r *RabbitMQ) connect() error {
 	if err != nil {
 		r.conn.Close()
 		r.ch.Close()
+		r.conn = nil // Ensure conn is nil if there's an error
 		r.log.ErrorLogger.Error("Failed to bind RabbitMQ queue", "error", err)
 		return err
 	}
@@ -91,13 +96,17 @@ func (r *RabbitMQ) connect() error {
 
 func (r *RabbitMQ) handleReconnect() {
 	for {
-		closeErrCh := make(chan *amqp.Error)
-		r.conn.NotifyClose(closeErrCh)
+		var closeErrCh chan *amqp.Error
+		if r.conn != nil {
+			closeErrCh = make(chan *amqp.Error)
+			r.conn.NotifyClose(closeErrCh)
+		}
 
 		select {
 		case err := <-closeErrCh:
 			if err != nil {
 				r.log.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+				r.log.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
 				r.reconnect()
 			}
 		case <-r.done:
@@ -107,25 +116,36 @@ func (r *RabbitMQ) handleReconnect() {
 }
 
 func (r *RabbitMQ) reconnect() {
-	for {
-		select {
-		case <-r.done:
-			return
-		default:
-			r.log.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
-			if err := r.connect(); err == nil {
-				r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
-				go r.consumeMessages() // Only start consuming messages after successful reconnection
-				return
-			}
-			time.Sleep(ReconnectDelay)
-		}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.reconnecting {
+		return
 	}
+	r.reconnecting = true
+
+	go func() {
+		defer func() { r.reconnecting = false }()
+
+		for {
+			select {
+			case <-r.done:
+				return
+			default:
+				if err := r.connect(); err == nil {
+					r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+					r.consumeMessages() // Only start consuming messages after successful reconnection
+					return
+				}
+				r.log.ErrorLogger.Error("Reconnection attempt failed, retrying...")
+				time.Sleep(ReconnectDelay)
+			}
+		}
+	}()
 }
 
 func (r *RabbitMQ) ConsumeMessages(handler func(amqp.Delivery), done <-chan struct{}) {
 	r.handler = handler
-	go r.consumeMessages()
+	r.consumeMessages()
 	<-done
 	r.Close()
 }
@@ -134,37 +154,37 @@ func (r *RabbitMQ) consumeMessages() {
 	r.wg.Add(1)
 	defer r.wg.Done()
 
-	for {
-		msgs, err := r.ch.Consume(
-			r.cfg.Rabbitmq.Queue,
-			"",
-			true,
-			false,
-			false,
-			false,
-			nil,
-		)
-		if err != nil {
-			r.log.ErrorLogger.Error("Failed to start consuming messages", "error", err)
-			return
-		}
+	msgs, err := r.ch.Consume(
+		r.cfg.Rabbitmq.Queue,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		r.log.ErrorLogger.Error("Failed to start consuming messages", "error", err)
+		r.reconnect()
+		return
+	}
 
-		for {
-			select {
-			case msg, ok := <-msgs:
-				if !ok {
-					r.log.InfoLogger.Info("Channel closed, waiting for reconnect")
-					return
-				}
-				r.wg.Add(1)
-				go func(msg amqp.Delivery) {
-					defer r.wg.Done()
-					r.handler(msg)
-				}(msg)
-			case <-r.done:
-				r.log.InfoLogger.Info("ConsumeMessages received done signal")
+	for {
+		select {
+		case msg, ok := <-msgs:
+			if !ok {
+				r.log.ErrorLogger.Error("RabbitMQ channel closed, triggering reconnect")
+				r.reconnect()
 				return
 			}
+			r.wg.Add(1)
+			go func(msg amqp.Delivery) {
+				defer r.wg.Done()
+				r.handler(msg)
+			}(msg)
+		case <-r.done:
+			r.log.InfoLogger.Info("ConsumeMessages received done signal")
+			return
 		}
 	}
 }

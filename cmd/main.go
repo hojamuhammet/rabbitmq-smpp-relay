@@ -46,6 +46,7 @@ func main() {
 
 	go func() {
 		<-sigChan
+		loggers.InfoLogger.Info("Received shutdown signal, shutting down gracefully...")
 		close(done)
 	}()
 
