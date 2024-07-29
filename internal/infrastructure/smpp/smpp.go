@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	MaxRetries     = 3
-	RetryDelay     = 2 * time.Second
+	RetryDelay     = 5 * time.Second
 	SegmentDelay   = 500 * time.Millisecond
 	ReconnectDelay = 5 * time.Second
 )
@@ -37,7 +36,6 @@ func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers) (*SMPPClient, er
 			break
 		} else {
 			loggers.ErrorLogger.Error("Failed to connect to SMPP server", "error", status.Error(), "addr", smppCfg.Addr, "user", smppCfg.User)
-			loggers.InfoLogger.Info("Retrying in 5 seconds...")
 			time.Sleep(5 * time.Second)
 		}
 	}
@@ -48,8 +46,7 @@ func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers) (*SMPPClient, er
 }
 
 func (c *SMPPClient) monitorConnection() {
-	for {
-		status := <-c.Transmitter.Bind()
+	for status := range c.Transmitter.Bind() {
 		if status.Status() == smpp.Disconnected {
 			c.Logger.ErrorLogger.Error("Lost connection to SMPP server", "error", status.Error())
 			c.reconnect()
@@ -62,17 +59,12 @@ func (c *SMPPClient) reconnect() {
 	for {
 		c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
 		connStatus := c.Transmitter.Bind()
-		reconnected := false
 		for status := range connStatus {
 			if status.Status() == smpp.Connected {
 				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
-				reconnected = true
-				break
+				return
 			}
 			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
-		}
-		if reconnected {
-			break
 		}
 		time.Sleep(ReconnectDelay)
 	}
@@ -86,10 +78,10 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	}
 
 	go func() {
-		for attempt := 0; attempt < MaxRetries; attempt++ {
+		for {
 			pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
 			if err != nil {
-				c.Logger.ErrorLogger.Error("Failed to send SMS", "attempt", attempt+1, "error", err)
+				c.Logger.ErrorLogger.Error("Failed to send SMS", "error", err)
 				time.Sleep(RetryDelay)
 				continue
 			}
@@ -101,8 +93,6 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 
 			return
 		}
-
-		c.Logger.ErrorLogger.Error("Failed to send SMS after multiple attempts", "src", src, "dst", dest, "text", text)
 	}()
 
 	return nil

@@ -29,7 +29,6 @@ func main() {
 		loggers.ErrorLogger.Error("Failed to create SMPP client", "error", err)
 		return
 	}
-	loggers.InfoLogger.Info("SMPP client is listening...")
 
 	rabbitMQ, err := rabbitmq.NewRabbitMQ(cfg, loggers)
 	if err != nil {
@@ -47,23 +46,18 @@ func main() {
 
 	go func() {
 		<-sigChan
-		loggers.InfoLogger.Info("Received shutdown signal, shutting down gracefully...")
 		close(done)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		loggers.InfoLogger.Info("Starting to consume messages...")
 		rabbitMQ.ConsumeMessages(msgService.HandleMessage, done)
-		loggers.InfoLogger.Info("Stopped consuming messages.")
 	}()
 
 	<-done
-	loggers.InfoLogger.Info("Main function received done signal, closing RabbitMQ connection...")
 	rabbitMQ.Close()
 
-	loggers.InfoLogger.Info("Waiting for all goroutines to finish...")
 	wg.Wait()
 	loggers.InfoLogger.Info("Server shut down gracefully.")
 }
