@@ -62,7 +62,7 @@ func (c *SMPPClient) monitorConnection() {
 	for status := range c.Transmitter.Bind() {
 		if status.Status() == smpp.Disconnected && !c.isShuttingDown {
 			c.Logger.ErrorLogger.Error("Lost connection to SMPP server", "error", status.Error())
-			c.reconnect()
+			go c.reconnect() // Use `go` here to avoid blocking the loop
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -77,37 +77,36 @@ func (c *SMPPClient) reconnect() {
 	c.reconnecting = true
 	c.mu.Unlock()
 
-	go func() {
-		defer func() {
-			c.mu.Lock()
-			c.reconnecting = false
-			c.mu.Unlock()
-		}()
-
-		for {
-			if c.isShuttingDown {
-				return
-			}
-
-			c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
-			connStatus := c.Transmitter.Bind()
-			reconnected := false
-			for status := range connStatus {
-				if status.Status() == smpp.Connected {
-					c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
-					reconnected = true
-					break
-				}
-				c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
-			}
-
-			if reconnected {
-				return
-			}
-
-			time.Sleep(ReconnectDelay)
+	for {
+		if c.isShuttingDown {
+			return
 		}
-	}()
+
+		c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
+		connStatus := c.Transmitter.Bind()
+		reconnected := false
+		for status := range connStatus {
+			if status.Status() == smpp.Connected {
+				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
+				reconnected = true
+				break
+			}
+			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
+		}
+
+		if reconnected {
+			break
+		}
+
+		time.Sleep(ReconnectDelay)
+	}
+
+	c.mu.Lock()
+	c.reconnecting = false
+	c.mu.Unlock()
+
+	// Ensure we continue monitoring the connection after a successful reconnect
+	go c.monitorConnection()
 }
 
 func (c *SMPPClient) SendSMS(src, dest, text string) error {
