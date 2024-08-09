@@ -16,9 +16,10 @@ type Config struct {
 }
 
 type Rabbitmq struct {
-	URL      string `yaml:"url"`
-	Exchange string `yaml:"exchange"`
-	Queue    string `yaml:"queue"`
+	URL         string `yaml:"url"`
+	Exchange    string `yaml:"exchange"`
+	Queue       string `yaml:"queue"`
+	Routing_key string `yaml:"routing_key"`
 }
 
 type HTTPServer struct {

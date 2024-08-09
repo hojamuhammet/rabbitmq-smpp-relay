@@ -38,27 +38,38 @@ func main() {
 
 	msgService := service.NewMessageService(smppClient, loggers)
 
+	// Channel to handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Channel to signal when to stop processing
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 
-	go func() {
-		<-sigChan
-		loggers.InfoLogger.Info("Received shutdown signal, shutting down gracefully...")
-		close(done)
-	}()
-
+	// Start consuming messages
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		rabbitMQ.ConsumeMessages(msgService.HandleMessage, done)
 	}()
 
-	<-done
-	rabbitMQ.Close()
+	// Wait for shutdown signal
+	go func() {
+		<-sigChan
+		loggers.InfoLogger.Info("Received shutdown signal, shutting down gracefully...")
 
+		// Signal all goroutines to stop
+		close(done)
+
+		// Close RabbitMQ connection and channel
+		rabbitMQ.Close()
+
+		// Close SMPP client
+		smppClient.Transmitter.Close()
+
+		loggers.InfoLogger.Info("Server shut down gracefully.")
+	}()
+
+	// Wait for all goroutines to complete
 	wg.Wait()
-	loggers.InfoLogger.Info("Server shut down gracefully.")
 }
