@@ -77,6 +77,12 @@ func (c *SMPPClient) reconnect() {
 	c.reconnecting = true
 	c.mu.Unlock()
 
+	defer func() {
+		c.mu.Lock()
+		c.reconnecting = false
+		c.mu.Unlock()
+	}()
+
 	for {
 		if c.isShuttingDown {
 			return
@@ -84,29 +90,17 @@ func (c *SMPPClient) reconnect() {
 
 		c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
 		connStatus := c.Transmitter.Bind()
-		reconnected := false
 		for status := range connStatus {
 			if status.Status() == smpp.Connected {
 				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
-				reconnected = true
-				break
+				go c.monitorConnection() // Continue monitoring after successful reconnect
+				return
 			}
 			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
 		}
 
-		if reconnected {
-			break
-		}
-
 		time.Sleep(ReconnectDelay)
 	}
-
-	c.mu.Lock()
-	c.reconnecting = false
-	c.mu.Unlock()
-
-	// Ensure we continue monitoring the connection after a successful reconnect
-	go c.monitorConnection()
 }
 
 func (c *SMPPClient) SendSMS(src, dest, text string) error {
@@ -116,11 +110,16 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 		Text: pdutext.UCS2(text),
 	}
 
-	// Attempt to send the message in the background
 	go func() {
 		for {
 			pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
 			if err != nil {
+				// Check if the error string contains the specific error code or description
+				if err.Error() == "148" || err.Error() == "unknown error" {
+					c.Logger.ErrorLogger.Error("Unknown error (148) detected, triggering SMPP reconnect", "error", err)
+					go c.reconnect() // Trigger reconnection if the error indicates "148 unknown error"
+					return
+				}
 				c.Logger.ErrorLogger.Error("Failed to send SMS", "error", err)
 				time.Sleep(RetryDelay)
 				continue
