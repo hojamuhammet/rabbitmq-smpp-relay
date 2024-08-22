@@ -111,27 +111,14 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	}
 
 	go func() {
-		for {
-			pdus, err := c.Transmitter.SubmitLongMsg(shortMsg)
-			if err != nil {
-				// Check if the error string contains the specific error code or description
-				if err.Error() == "148" || err.Error() == "unknown error" {
-					c.Logger.ErrorLogger.Error("Unknown error (148) detected, triggering SMPP reconnect", "error", err)
-					go c.reconnect() // Trigger reconnection if the error indicates "148 unknown error"
-					return
-				}
-				c.Logger.ErrorLogger.Error("Failed to send SMS", "error", err)
-				time.Sleep(RetryDelay)
-				continue
-			}
-
-			for i := range pdus {
-				pdu := &pdus[i]
-				c.Logger.InfoLogger.Info("Message segment sent successfully", "src", pdu.Src, "dst", pdu.Dst, "text", pdu.Text)
-			}
-
+		_, err := c.Transmitter.SubmitLongMsg(shortMsg)
+		if err != nil {
+			c.Logger.ErrorLogger.Error("Error encountered during SMS submission, triggering SMPP reconnect", "error", err)
+			go c.reconnect()
 			return
 		}
+
+		c.Logger.InfoLogger.Info("Message sent successfully", "src", src, "dst", dest, "text", text)
 	}()
 
 	return nil
