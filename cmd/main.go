@@ -24,13 +24,13 @@ func main() {
 
 	loggers.InfoLogger.Info("Starting the server...")
 
-	smppClient, err := smpp.NewSMPPClient(cfg, loggers, 100) // 100 workers for SMPPClient
+	smppClient, err := smpp.NewSMPPClient(cfg, loggers, 100)
 	if err != nil {
 		loggers.ErrorLogger.Error("Failed to create SMPP client", "error", err)
 		return
 	}
 
-	rabbitMQ, err := rabbitmq.NewRabbitMQ(cfg, loggers, 200) // 200 workers for RabbitMQ
+	rabbitMQ, err := rabbitmq.NewRabbitMQ(cfg, loggers, 200)
 	if err != nil {
 		loggers.ErrorLogger.Error("Failed to initialize RabbitMQ", "error", err)
 		return
@@ -38,36 +38,28 @@ func main() {
 
 	msgService := service.NewMessageService(smppClient, loggers)
 
-	// Channel to handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Channel to signal when to stop processing
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 
-	// Start consuming messages
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		rabbitMQ.ConsumeMessages(msgService.HandleMessage, done)
 	}()
 
-	// Wait for shutdown signal
 	<-sigChan
 	loggers.InfoLogger.Info("Received shutdown signal, shutting down gracefully...")
 
-	// Signal all goroutines to stop
 	close(done)
 
-	// Close RabbitMQ connection and channel
 	rabbitMQ.Close()
 
-	// Close SMPP client
 	smppClient.Close()
 
 	loggers.InfoLogger.Info("Server shut down gracefully.")
 
-	// Wait for all goroutines to complete
 	wg.Wait()
 }

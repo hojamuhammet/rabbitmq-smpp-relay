@@ -22,7 +22,7 @@ type SMPPClient struct {
 	mu             sync.Mutex
 	reconnecting   bool
 	isShuttingDown bool
-	workerPool     chan struct{} // Worker pool to limit concurrency
+	workerPool     chan struct{}
 }
 
 func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers, maxWorkers int) (*SMPPClient, error) {
@@ -36,7 +36,7 @@ func NewSMPPClient(cfg *config.Config, loggers *logger.Loggers, maxWorkers int) 
 	client := &SMPPClient{
 		Transmitter: tm,
 		Logger:      loggers,
-		workerPool:  make(chan struct{}, maxWorkers), // Initialize worker pool with maxWorkers
+		workerPool:  make(chan struct{}, maxWorkers),
 	}
 	client.connect()
 
@@ -59,7 +59,6 @@ func (c *SMPPClient) connect() {
 		}
 	}
 
-	// If connection fails, trigger reconnection
 	go c.reconnect()
 }
 
@@ -67,7 +66,7 @@ func (c *SMPPClient) monitorConnection() {
 	for status := range c.Transmitter.Bind() {
 		if status.Status() == smpp.Disconnected && !c.isShuttingDown {
 			c.Logger.ErrorLogger.Error("Lost connection to SMPP server", "error", status.Error())
-			go c.reconnect() // Ensure reconnect is called in a goroutine
+			go c.reconnect()
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -98,7 +97,7 @@ func (c *SMPPClient) reconnect() {
 		for status := range connStatus {
 			if status.Status() == smpp.Connected {
 				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
-				go c.monitorConnection() // Restart monitoring after successful reconnect
+				go c.monitorConnection()
 				return
 			}
 			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
@@ -115,14 +114,12 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 		Text: pdutext.UCS2(text),
 	}
 
-	// Use worker pool to limit concurrency
-	c.workerPool <- struct{}{} // Acquire a worker slot
+	c.workerPool <- struct{}{}
 	go func() {
-		defer func() { <-c.workerPool }() // Release worker slot
+		defer func() { <-c.workerPool }()
 
 		_, err := c.Transmitter.SubmitLongMsg(shortMsg)
 		if err != nil {
-			// Log the error and trigger reconnection for any error
 			c.Logger.ErrorLogger.Error("Error encountered during SMS submission, triggering SMPP reconnect", "error", err)
 			go c.reconnect()
 			return

@@ -24,7 +24,7 @@ type RabbitMQ struct {
 	isShuttingDown  bool
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
-	workerPool      chan struct{} // Worker pool to limit concurrency
+	workerPool      chan struct{}
 }
 
 func NewRabbitMQ(cfg *config.Config, loggers *logger.Loggers, maxWorkers int) (*RabbitMQ, error) {
@@ -32,7 +32,7 @@ func NewRabbitMQ(cfg *config.Config, loggers *logger.Loggers, maxWorkers int) (*
 		cfg:        cfg,
 		log:        loggers,
 		done:       make(chan struct{}),
-		workerPool: make(chan struct{}, maxWorkers), // Initialize worker pool with maxWorkers
+		workerPool: make(chan struct{}, maxWorkers),
 	}
 	if err := rmq.run(); err != nil {
 		return nil, err
@@ -170,15 +170,13 @@ func (r *RabbitMQ) reconnect() {
 
 		r.log.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
 
-		// Attempt to reconnect
 		if err := r.connect(); err == nil {
 			r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
-			r.consumeMessages()   // Restart message consumption
-			r.monitorConnection() // Restart connection monitoring
+			r.consumeMessages()
+			r.monitorConnection()
 			return
 		}
 
-		// Log and wait before retrying
 		r.log.ErrorLogger.Error("Reconnection attempt failed, retrying...")
 		time.Sleep(ReconnectDelay)
 	}
@@ -213,9 +211,9 @@ func (r *RabbitMQ) consumeMessages() {
 
 	go func() {
 		for msg := range msgs {
-			r.workerPool <- struct{}{} // Acquire a worker slot
+			r.workerPool <- struct{}{}
 			go func(msg amqp.Delivery) {
-				defer func() { <-r.workerPool }() // Release worker slot
+				defer func() { <-r.workerPool }()
 				r.handler(msg)
 			}(msg)
 		}
