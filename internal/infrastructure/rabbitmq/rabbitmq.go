@@ -24,13 +24,15 @@ type RabbitMQ struct {
 	isShuttingDown  bool
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
+	workerPool      chan struct{} // Worker pool to limit concurrency
 }
 
-func NewRabbitMQ(cfg *config.Config, loggers *logger.Loggers) (*RabbitMQ, error) {
+func NewRabbitMQ(cfg *config.Config, loggers *logger.Loggers, maxWorkers int) (*RabbitMQ, error) {
 	rmq := &RabbitMQ{
-		cfg:  cfg,
-		log:  loggers,
-		done: make(chan struct{}),
+		cfg:        cfg,
+		log:        loggers,
+		done:       make(chan struct{}),
+		workerPool: make(chan struct{}, maxWorkers), // Initialize worker pool with maxWorkers
 	}
 	if err := rmq.run(); err != nil {
 		return nil, err
@@ -155,37 +157,36 @@ func (r *RabbitMQ) reconnect() {
 	r.reconnecting = true
 	r.mu.Unlock()
 
-	go func() {
-		defer func() {
-			r.mu.Lock()
-			r.reconnecting = false
-			r.mu.Unlock()
-		}()
-
-		for {
-			if r.isShuttingDown {
-				return
-			}
-
-			r.log.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
-
-			// Attempt to reconnect
-			if err := r.connect(); err == nil {
-				r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
-				go r.consumeMessages()   // Restart message consumption
-				go r.monitorConnection() // Restart connection monitoring
-				return
-			}
-
-			// Log and wait before retrying
-			r.log.ErrorLogger.Error("Reconnection attempt failed, retrying...")
-			time.Sleep(ReconnectDelay)
-		}
+	defer func() {
+		r.mu.Lock()
+		r.reconnecting = false
+		r.mu.Unlock()
 	}()
+
+	for {
+		if r.isShuttingDown {
+			return
+		}
+
+		r.log.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
+
+		// Attempt to reconnect
+		if err := r.connect(); err == nil {
+			r.log.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+			r.consumeMessages()   // Restart message consumption
+			r.monitorConnection() // Restart connection monitoring
+			return
+		}
+
+		// Log and wait before retrying
+		r.log.ErrorLogger.Error("Reconnection attempt failed, retrying...")
+		time.Sleep(ReconnectDelay)
+	}
 }
 
 func (r *RabbitMQ) ConsumeMessages(handler func(amqp.Delivery), done <-chan struct{}) {
 	r.handler = handler
+
 	r.consumeMessages()
 	<-done
 	r.Close()
@@ -212,7 +213,11 @@ func (r *RabbitMQ) consumeMessages() {
 
 	go func() {
 		for msg := range msgs {
-			r.handler(msg)
+			r.workerPool <- struct{}{} // Acquire a worker slot
+			go func(msg amqp.Delivery) {
+				defer func() { <-r.workerPool }() // Release worker slot
+				r.handler(msg)
+			}(msg)
 		}
 
 		r.log.ErrorLogger.Error("Message channel closed, attempting to reconnect")
