@@ -72,11 +72,11 @@ func (c *SMPPClient) monitorConnection() {
 	}
 }
 
-func (c *SMPPClient) reconnect() {
+func (c *SMPPClient) reconnect() bool {
 	c.mu.Lock()
 	if c.reconnecting {
 		c.mu.Unlock()
-		return
+		return false
 	}
 	c.reconnecting = true
 	c.mu.Unlock()
@@ -89,7 +89,7 @@ func (c *SMPPClient) reconnect() {
 
 	for {
 		if c.isShuttingDown {
-			return
+			return false
 		}
 
 		c.Logger.InfoLogger.Info("Attempting to reconnect to SMPP server...")
@@ -98,7 +98,7 @@ func (c *SMPPClient) reconnect() {
 			if status.Status() == smpp.Connected {
 				c.Logger.InfoLogger.Info("Reconnected to SMPP server.")
 				go c.monitorConnection()
-				return
+				return true
 			}
 			c.Logger.ErrorLogger.Error("Reconnection failed", "error", status.Error())
 		}
@@ -115,19 +115,23 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	}
 
 	c.workerPool <- struct{}{}
-	go func() {
-		defer func() { <-c.workerPool }()
+	defer func() { <-c.workerPool }()
 
-		_, err := c.Transmitter.SubmitLongMsg(shortMsg)
-		if err != nil {
-			c.Logger.ErrorLogger.Error("Error encountered during SMS submission, triggering SMPP reconnect", "error", err)
-			go c.reconnect()
-			return
+	_, err := c.Transmitter.SubmitLongMsg(shortMsg)
+	if err != nil {
+		c.Logger.ErrorLogger.Error("Error encountered during SMS submission, triggering SMPP reconnect", "error", err)
+
+		// Block until reconnection is successful
+		for {
+			if c.reconnect() {
+				break
+			}
+			time.Sleep(RetryDelay)
 		}
+		return err
+	}
 
-		c.Logger.InfoLogger.Info("Message sent successfully", "src", src, "dst", dest, "text", text)
-	}()
-
+	c.Logger.InfoLogger.Info("Message sent successfully", "src", src, "dst", dest, "text", text)
 	return nil
 }
 
