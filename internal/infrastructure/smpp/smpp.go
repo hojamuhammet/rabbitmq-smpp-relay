@@ -117,7 +117,7 @@ func (c *SMPPClient) SendSMS(src, dest, text string) error {
 	c.workerPool <- struct{}{}
 	defer func() { <-c.workerPool }()
 
-	_, err := c.Transmitter.SubmitLongMsg(shortMsg)
+	_, err := c.Transmitter.Submit(shortMsg)
 	if err != nil {
 		c.Logger.ErrorLogger.Error("Error encountered during SMS submission, triggering SMPP reconnect", "error", err)
 
